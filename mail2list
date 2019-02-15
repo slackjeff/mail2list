@@ -1,0 +1,161 @@
+#!/bin/sh
+#===========HEADER==================================================|
+#NOME
+# Jefferson Rocha 'slackjeff' <lrcjefferson@gmail.com>
+#
+#MAIL2LIST, VERSÃO 0.2.1
+#
+#DESCRIÇÃO
+# Programa para automatizar o envio de lista de emails.
+#
+#DEPS
+# mutt
+# nano
+#===================================================================|
+
+#======CONFIGURACOES DO EMAIL
+# Servidor
+server='@email-ssl.com.br:465/'
+# Nome
+realname='Slackjeff'
+# Senha
+password=''
+# Email, exemplo: example@example.com
+email='root@slackjeff.com.br'
+
+#======VARIAVEIS
+# Corpo/mensagem do email
+body_email="/tmp/arquivo.txt"
+body_email_sign="${body_email}.asc"
+# Banco de dados
+database="/tmp/mail-list.txt"
+# Arquivo de configuração temporario do mutt
+muttrc="/tmp/.muttrc.tmp"
+# Editor Favorito
+editor="${EDITOR:=nano}"
+
+#==DEPENDENCIAS
+deps=(
+   mutt
+   ${editor}
+   gpg
+)
+#==CORES
+red="\033[31;1m"
+end_color="\033[m"
+
+#=======VERIFICACOES
+# Root?
+[ "$UID" -eq "0" ] && { echo "ROOT? NO."; exit 1 ;}
+# Fazendo copia segura para meu home.
+
+# Banco de dados existe?
+if [ ! -e "$database" ]; then
+   echo "${database} não foi encontrado!"
+   exit 1
+else
+  cp "$database" "${HOME}/mail-list-COPY.txt" && \
+  echo -e "\n---Copia Realizada em $(date +%d/%m/%Y)" >> "${HOME}/mail-list-COPY.txt"
+fi
+
+[ -e "$muttrc" ] && rm "$muttrc" # Removendo arquivo de configuração antigo.
+
+# Verificando se todas dependecias estão no sistema
+for dep in "${deps[@]}"; do
+   type "$dep" 1>/dev/null 2>&1 || { echo "${dep} não existe no sistema! ABORTANDO."; exit 137 ;}
+done
+
+#=======FUNCOES
+_muttconf() # Arquivo de configuração temporario do mutt
+{
+cat > "$muttrc" <<END
+# About-me
+set from="${email}"
+set realname="${realname}"
+
+# Credenciais
+set imap_user="${email}"
+set imap_pass="${password}"
+set smtp_url="smtps://${email}${server}"
+set smtp_pass="${password}"
+
+# Others
+set ssl_starttls=yes
+set ssl_force_tls=yes
+
+# Signature
+#set signature="$sign"
+END
+}
+
+_register() # Registrando novos emails
+{
+   if grep -owq "^${1}$" "$database"; then
+      echo -e "${red}O email ${1} EXISTE no banco de dados.${end_color}"
+      echo -e "${red}Cadastro não foi concluído...${end_color}"
+      exit 1
+   else
+      echo "${1}" | grep "@" || { echo "Você precisa por o \"@\" ABORTANDO."; exit 1 ;}
+      echo -n "--->Confirma o cadastro de \"${1}\" [S/n]"; read confirm; confirm="${confirm:=S}"
+      [ "$confirm" != 'S' -a "$confirm" != 's' ] && { echo -e "${red}Ok...ABORTANDO.${end_color}"; exit 0 ;}
+      echo "${1}" >> "$database"
+      echo "Cadastro de \"${1}\" foi concluído com sucesso!"
+   fi
+}
+
+_send() # Envio do(s) email(s)
+{
+   # Pegando o dia (segunda,sexta ETC...)
+   day=$(date "+%A"); day="${day^}"
+   "$editor" "$body_email" # Abrindo digito da mensagem
+    sub="${subject:="Vídeo de ${day} SLACKJEFF"}" # Definindo titulo do email
+    echo -n "Deseja Enviar o EMAIL agora?? [S/n]"; read send_now; send_now="${send_now,,}"
+    if [ "$send_now" = 's' -o "$send_now" = '' ]; then
+       echo "---->Gerando Assinatura."
+       gpg --clearsign "$body_email" || { echo -e "${red}ERRO NA ASSINATURA, ABORTANDO${end_color}"; exit 1;}
+       while read list_mail; do # Enviando email
+          echo "--->Enviando email para: ${list_mail}"
+          mutt -s "$subject" -F "$muttrc" "$list_mail" < "$body_email_sign" 2>/dev/null
+          [ "$?" -ne '0' ] && { echo -e "${red}ERRO! ABORTANDO${end_color}"; exit 1 ;}
+       done < "${database}"
+    else
+       echo "Ok... Saindo! arquivo de corpo de mensagem gerado: ${body_email}"
+       exit 0
+    fi
+
+   _clear # Funcao
+   return 0
+}
+
+_clear()
+{
+   echo -e "\n-------APAGANDO ARQUIVOS TEMPORARIOS"
+   rm "${muttrc}" "${body_email}" "${body_email_sign}" && { echo "Apagados com SUCESSO."; return 0 ;}
+}
+
+_help()
+{
+cat <<EOF
+mail2list [OPCOES]
+   -r, register  Registrar novo email
+   -s, send      Enviar email para lista
+   -c, clear     Limpar arquivos temporarios
+
+Cópia Segura
+   Lista de Emails  /home/USUARIO/mail-list-COPY.txt
+
+Arquivos criados temporariamente
+   Configuração do mutt        /tmp/.muttrc.tmp
+   Corpo da Mensagem           /tmp/arquivo.txt
+   Corpo da Mensagem assinada  /tmp/arquivo.txt.asc
+   Assinatura                  /tmp/.signature
+EOF
+}
+
+#=======PRINCIPAL
+case $1 in
+   -r|register) shift ; _register "$@"     ;;
+   -s|send)     shift ; _muttconf ; _send  ;;
+   -c|clear)    _clear                     ;;
+   *) _help                                ;;
+esac
